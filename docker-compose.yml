@@ -1,0 +1,43 @@
+services:
+  process-bins:
+    build: .
+    container_name: procesar-bines
+    environment:
+      - RAPIDAPI_KEY=${RAPIDAPI_KEY}
+      - SQLSERVER_SERVER=${SQLSERVER_SERVER}
+      - SQLSERVER_DB=${SQLSERVER_DB:-BinesDB}
+      - SQLSERVER_USER=${SQLSERVER_USER}
+      - SQLSERVER_PWD=${SQLSERVER_PWD}
+      - APP_EXECUTOR=${APP_EXECUTOR:-Docker_User}
+      - APP_LOG_DIR=./logs
+    volumes:
+      - ./logs:/app/logs
+      - ./data/output:/app/data/output
+      - ./.env:/app/.env:ro
+    command: ["python", "src/process_bins.py"]
+    depends_on:
+      - sqlserver
+    networks:
+      - bines-network
+
+  # SQL Server para desarrollo/testing
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: sqlserver-bines
+    environment:
+      - ACCEPT_EULA=Y
+      - SA_PASSWORD=YourStrong@Passw0rd
+      - MSSQL_PID=Express
+    ports:
+      - "1433:1433"
+    volumes:
+      - sqlserver_data:/var/opt/mssql
+    networks:
+      - bines-network
+
+volumes:
+  sqlserver_data:
+
+networks:
+  bines-network:
+    driver: bridge
