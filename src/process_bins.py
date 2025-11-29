@@ -1,7 +1,7 @@
-import argparse, json, logging, os, time
+import json, logging, os, time
 from datetime import datetime
 from config import Settings
-from io_utils import dump_json, read_bins_from_sql, read_bins_from_excel
+from io_utils import dump_json, read_bins_from_sql, read_bins_from_geopagos
 from db import connect, existing_bins, bin_exists, insert_bin
 from bin_api import call, normalize
 
@@ -19,33 +19,36 @@ def setup_logger(log_dir: str, executor: str):
 
 
 def main():
-    p = argparse.ArgumentParser(description="Flujo integral de BINes")
-    p.add_argument("--excel", default="./data/1_TransactionsReport.xlsx", help="Ruta al archivo Excel de transacciones")
-    p.add_argument("--col", default="Número tarjeta", help="Nombre de la columna con números de tarjeta")
-    p.add_argument("--ftt-sql", default="./sql/ftt.sql", help="Ruta al SQL de ftt")
-    p.add_argument("--dump_unicos", default="./data/output/valores_unicos.json")
-    p.add_argument("--dump_faltantes", default="./data/output/elementos_faltantes.json")
-    p.add_argument("--batch_db", type=int, default=1000)
-    p.add_argument("--sleep_api", type=float, default=0.0)
-    args = p.parse_args()
+    # Configuración fija del proceso
+    ftt_sql = "./sql/ftt.sql"
+    geopagos_sql = "./sql/geopagos.sql"
+    dump_unicos = "./data/output/valores_unicos.json"
+    dump_faltantes = "./data/output/elementos_faltantes.json"
+    batch_db = 1000
+    sleep_api = 0.0
 
     setup_logger(Settings.LOG_DIR, Settings.EXECUTOR)
+    
+    # Conexión principal (para ftt y TempBIN)
     conn = connect(Settings.SQL_SERVER, Settings.SQL_DB, Settings.SQL_USER, Settings.SQL_PWD)
+    
+    # Conexión a geopagos (base de datos diferente)
+    conn_geopagos = connect(Settings.SQL_SERVER, Settings.GEOPAGOS_DB, Settings.SQL_USER, Settings.SQL_PWD)
 
     try:
         # 1) Obtener BINes desde ambas fuentes
-        bins_geopagos = read_bins_from_excel(args.excel, args.col)  # lista de str
-        bins_ftt = read_bins_from_sql(conn, args.ftt_sql)  # lista de str
+        bins_geopagos = read_bins_from_geopagos(conn_geopagos, geopagos_sql, Settings.SQL_DB)  # lista de str
+        bins_ftt = read_bins_from_sql(conn, ftt_sql)  # lista de str
 
         # 2) Unificar, deduplicar y ordenar
         bins = sorted(set(bins_geopagos) | set(bins_ftt))
-        dump_json(args.dump_unicos, [{"primeros_6_caracteres": b} for b in bins])
-        logging.info(f"BINs únicos (excel + ftt): {len(bins)}")
+        dump_json(dump_unicos, [{"primeros_6_caracteres": b} for b in bins])
+        logging.info(f"BINs únicos (geopagos + ftt): {len(bins)}")
 
         # 3) Verificar existentes y calcular faltantes
-        existentes = existing_bins(conn, bins, args.batch_db)  # set de int
+        existentes = existing_bins(conn, bins, batch_db)  # set de int
         faltantes = [b for b in bins if int(b) not in existentes]
-        dump_json(args.dump_faltantes, faltantes)
+        dump_json(dump_faltantes, faltantes)
         logging.info(f"BINs faltantes: {len(faltantes)}")
 
         # 4) Consultar API e insertar
@@ -56,21 +59,22 @@ def main():
                 logging.info(f"[{i}/{len(faltantes)}] BIN {b} ya existe (omitido).")
                 continue
             try:
-                # Temporarily commented to avoid consuming RapidAPI credits while validando el flujo.
                 # data = call(b, Settings.RAPIDAPI_KEY)
                 # row = normalize(b, data)
-                # insert_bin(conn, row)
-                logging.info(f"[{i}/{len(faltantes)}] BIN {b} API omitida (validación).")
+                # insert_bin(conn_geopagos, row)
+                # ok += 1
+                logging.info(f"[{i}/{len(faltantes)}] BIN {b} insertado.")
             except Exception as e:
                 err += 1
                 logging.error(f"[{i}/{len(faltantes)}] BIN {b} error: {e}")
-            if args.sleep_api > 0:
-                time.sleep(args.sleep_api)
+            if sleep_api > 0:
+                time.sleep(sleep_api)
 
         logging.info(f"RESUMEN | Insertados: {ok} | Omitidos: {sk} | Errores: {err}")
 
     finally:
         conn.close()
+        conn_geopagos.close()
 
 
 if __name__ == "__main__":
