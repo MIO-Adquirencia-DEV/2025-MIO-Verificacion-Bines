@@ -1,5 +1,6 @@
 import json, logging, os, time
 from datetime import datetime
+from pathlib import Path
 from config import Settings
 from io_utils import dump_json, read_bins_from_sql, read_bins_from_geopagos
 from db import connect, existing_bins, bin_exists, insert_bin
@@ -19,15 +20,27 @@ def setup_logger(log_dir: str, executor: str):
 
 
 def main():
-    # Configuración fija del proceso
-    ftt_sql = "./sql/ftt.sql"
-    geopagos_sql = "./sql/geopagos.sql"
-    dump_unicos = "./data/output/valores_unicos.json"
-    dump_faltantes = "./data/output/elementos_faltantes.json"
+    # Obtener el directorio base del proyecto (dos niveles arriba de src/)
+    script_dir = Path(__file__).parent
+    project_root = script_dir.parent
+    
+    # Configuración fija del proceso (rutas relativas al proyecto)
+    ftt_sql = project_root / "sql" / "ftt.sql"
+    geopagos_sql = project_root / "sql" / "geopagos.sql"
+    dump_unicos = project_root / "data" / "output" / "valores_unicos.json"
+    dump_faltantes = project_root / "data" / "output" / "elementos_faltantes.json"
     batch_db = 1000
     sleep_api = 0.0
+    
+    # Crear directorio de output si no existe
+    dump_unicos.parent.mkdir(parents=True, exist_ok=True)
 
-    setup_logger(Settings.LOG_DIR, Settings.EXECUTOR)
+    # Asegurar que LOG_DIR sea relativo al proyecto si es relativo
+    log_dir = Settings.LOG_DIR
+    if not os.path.isabs(log_dir):
+        log_dir = str(project_root / log_dir)
+    
+    setup_logger(log_dir, Settings.EXECUTOR)
     
     # Conexión principal (para ftt y TempBIN)
     conn = connect(Settings.SQL_SERVER, Settings.SQL_DB, Settings.SQL_USER, Settings.SQL_PWD)
@@ -37,18 +50,18 @@ def main():
 
     try:
         # 1) Obtener BINes desde ambas fuentes
-        bins_geopagos = read_bins_from_geopagos(conn_geopagos, geopagos_sql, Settings.SQL_DB)  # lista de str
-        bins_ftt = read_bins_from_sql(conn, ftt_sql)  # lista de str
+        bins_geopagos = read_bins_from_geopagos(conn_geopagos, str(geopagos_sql), Settings.SQL_DB)  # lista de str
+        bins_ftt = read_bins_from_sql(conn, str(ftt_sql))  # lista de str
 
         # 2) Unificar, deduplicar y ordenar
         bins = sorted(set(bins_geopagos) | set(bins_ftt))
-        dump_json(dump_unicos, [{"primeros_6_caracteres": b} for b in bins])
+        dump_json(str(dump_unicos), [{"primeros_6_caracteres": b} for b in bins])
         logging.info(f"BINs únicos (geopagos + ftt): {len(bins)}")
 
         # 3) Verificar existentes y calcular faltantes
         existentes = existing_bins(conn, bins, batch_db)  # set de int
         faltantes = [b for b in bins if int(b) not in existentes]
-        dump_json(dump_faltantes, faltantes)
+        dump_json(str(dump_faltantes), faltantes)
         logging.info(f"BINs faltantes: {len(faltantes)}")
 
         # 4) Consultar API e insertar
@@ -59,10 +72,10 @@ def main():
                 logging.info(f"[{i}/{len(faltantes)}] BIN {b} ya existe (omitido).")
                 continue
             try:
-                # data = call(b, Settings.RAPIDAPI_KEY)
-                # row = normalize(b, data)
-                # insert_bin(conn_geopagos, row)
-                # ok += 1
+                data = call(b, Settings.RAPIDAPI_KEY)
+                row = normalize(b, data)
+                insert_bin(conn_geopagos, row)
+                ok += 1
                 logging.info(f"[{i}/{len(faltantes)}] BIN {b} insertado.")
             except Exception as e:
                 err += 1
