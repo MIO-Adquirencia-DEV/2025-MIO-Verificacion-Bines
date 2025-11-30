@@ -26,11 +26,31 @@ def normalize(item: str, data: dict) -> dict:
     b = data["BIN"]
     typ = b.get("type")
     if isinstance(typ, list): typ = typ[0] if typ else None
+    
+    # Tomar la primera letra del tipo y ponerla en mayúscula
+    tipo_producto = "C"  # Por defecto
+    if typ:
+        typ_str = str(typ).strip()
+        if typ_str:
+            tipo_producto = typ_str[0].upper()  # Primera letra en mayúscula
+    
+    # Normalizar marca: solo Mastercard en Title Case, los demás en mayúsculas
+    marca = b.get("brand")
+    if marca:
+        marca_str = str(marca).upper()
+        if marca_str == "MASTERCARD":
+            marca = "Mastercard"
+        else:
+            marca = marca_str  # Los demás se quedan en mayúsculas
+    
     country = (b.get("country") or {}).get("alpha2")
+    # Si el país es DO o DOM, es Local, sino Internacional
+    region = "Local" if country and country.upper() in ("DO", "DOM") else "Internacional"
+    
     return {
-        "Marca": b.get("brand"),
+        "Marca": marca,
         "BIN": int(item),
-        "TipoProducto": typ,
+        "TipoProducto": tipo_producto,
         "Pais": country,
-        "Region": "Local" if country == "DO" else "Internacional"
+        "Region": region
     }
